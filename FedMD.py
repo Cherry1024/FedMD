@@ -14,11 +14,11 @@ class FedMD():
                  N_logits_matching_round, logits_matching_batchsize, 
                  N_private_training_round, private_training_batchsize):
         
-        self.N_parties = len(parties)
-        self.public_dataset = public_dataset
-        self.private_data = private_data
+        self.N_parties = len(parties) # 预训练模型的个数
+        self.public_dataset = public_dataset # 公共训练集mnist
+        self.private_data = private_data # 各个节点的私有训练集Emnist
         self.private_test_data = private_test_data
-        self.N_alignment = N_alignment
+        self.N_alignment = N_alignment # 初始化5000
         
         self.N_rounds = N_rounds
         self.N_logits_matching_round = N_logits_matching_round
@@ -34,13 +34,13 @@ class FedMD():
             print("model ", i)
             model_A_twin = None
             model_A_twin = clone_model(parties[i])
-            model_A_twin.set_weights(parties[i].get_weights())
+            model_A_twin.set_weights(parties[i].get_weights())  # 获取第i个模型
             model_A_twin.compile(optimizer=tf.keras.optimizers.Adam(lr = 1e-3), 
                                  loss = "sparse_categorical_crossentropy",
                                  metrics = ["accuracy"])
             
-            print("start full stack training ... ")        
-            
+            print("start full stack training ... ")
+            # 第i个模型在私有训练集上训练
             model_A_twin.fit(private_data[i]["X"], private_data[i]["y"],
                              batch_size = 32, epochs = 25, shuffle=True, verbose = 0,
                              validation_data = [private_test_data["X"], private_test_data["y"]],
@@ -48,13 +48,13 @@ class FedMD():
                             )
             
             print("full stack training done")
-            
+
             model_A = remove_last_layer(model_A_twin, loss="mean_absolute_error")
-            
+            # collaborative_parties保存各个节点的模型和参数
             self.collaborative_parties.append({"model_logits": model_A, 
                                                "model_classifier": model_A_twin,
                                                "model_weights": model_A_twin.get_weights()})
-            
+            # init_result保存每个节点的acc和loss
             self.init_result.append({"val_acc": model_A_twin.history.history['val_acc'],
                                      "train_acc": model_A_twin.history.history['acc'],
                                      "val_loss": model_A_twin.history.history['val_loss'],
@@ -64,11 +64,11 @@ class FedMD():
             print()
             del model_A, model_A_twin
         #END FOR LOOP
-        
+        # 在测试机训练一遍
         print("calculate the theoretical upper bounds for participants: ")
         
         self.upper_bounds = []
-        self.pooled_train_result = []
+        self.pooled_train_result = [] # pooled_train_result保存训练集上的acc和loss
         for model in parties:
             model_ub = clone_model(model)
             model_ub.set_weights(model.get_weights())
@@ -97,7 +97,7 @@ class FedMD():
             alignment_data = generate_alignment_data(self.public_dataset["X"], 
                                                      self.public_dataset["y"],
                                                      self.N_alignment)
-            
+            # 从公共数据集选取N_alignment个样本作为数据集
             print("round ", r)
             
             print("update logits ... ")
@@ -106,7 +106,7 @@ class FedMD():
             for d in self.collaborative_parties:
                 d["model_logits"].set_weights(d["model_weights"])
                 logits += d["model_logits"].predict(alignment_data["X"], verbose = 0)
-                
+                # logits为5000*16
             logits /= self.N_parties
             
             # test performance
@@ -128,19 +128,19 @@ class FedMD():
             print("updates models ...")
             for index, d in enumerate(self.collaborative_parties):
                 print("model {0} starting alignment with public logits... ".format(index))
-                
+                # 一致性，consensus
                 
                 weights_to_use = None
                 weights_to_use = d["model_weights"]
 
                 d["model_logits"].set_weights(weights_to_use)
-                d["model_logits"].fit(alignment_data["X"], logits, 
+                d["model_logits"].fit(alignment_data["X"], logits,   # 5000*28*28 ===> 5000*16
                                       batch_size = self.logits_matching_batchsize,  
                                       epochs = self.N_logits_matching_round, 
                                       shuffle=True, verbose = True)
-                d["model_weights"] = d["model_logits"].get_weights()
+                d["model_weights"] = d["model_logits"].get_weights() # 在公共数据上更新权重
                 print("model {0} done alignment".format(index))
-
+                # 按照私有数据训练
                 print("model {0} starting training with private data... ".format(index))
                 weights_to_use = None
                 weights_to_use = d["model_weights"]
@@ -157,6 +157,3 @@ class FedMD():
         
         #END WHILE LOOP
         return collaboration_performance
-
-
-        
